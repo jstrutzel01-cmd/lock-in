@@ -48,12 +48,23 @@ object Usg {
 
     fun top(c: Context) = rec(c, 60_000).firstOrNull()?.first
 
+    @Suppress("DEPRECATION")
     fun tdy(c: Context): List<Pair<String,Long>> {
         val k = Calendar.getInstance()
         k.set(Calendar.HOUR_OF_DAY,0); k.set(Calendar.MINUTE,0); k.set(Calendar.SECOND, 0); k.set(Calendar.MILLISECOND, 0)
-        return sm(c).queryAndAggregateUsageStats(k.timeInMillis, System.currentTimeMillis()).values
-            .filter { it.totalTimeInForeground > 60000 }.sortedByDescending { it.totalTimeInForeground }
-            .take(15).map { it.packageName to it.totalTimeInForeground }
+        val now = System.currentTimeMillis()
+        val ev = sm(c).queryEvents(k.timeInMillis, now)
+        val e = UsageEvents.Event()
+        val tot = HashMap<String, Long>()
+        val from = HashMap<String, Long>()
+        while (ev.hasNextEvent()) {
+            ev.getNextEvent(e)
+            if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) from.putIfAbsent(e.packageName, e.timeStamp)
+            else if (e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND)
+                from.remove(e.packageName)?.let { tot[e.packageName] = (tot[e.packageName] ?: 0) + e.timeStamp - it }
+        }
+        for ((p, t) in from) tot[p] = (tot[p] ?: 0) + now - t
+        return tot.filter { it.value > 60000 }.toList().sortedByDescending { it.second }.take(15)
     }
 
     fun lbl(c: Context, p: String) = try {
