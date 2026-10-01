@@ -28,7 +28,7 @@ class NutViewModel : ViewModel() {
         val userID = auth.currentUser?.uid ?: return
 
         db.collection("users").document(userID).collection("nutrition")
-            .orderBy("timestamp", Query.Direction.ASCENDING)
+            .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     return@addSnapshotListener
@@ -40,10 +40,9 @@ class NutViewModel : ViewModel() {
             }
     }
 
-    // Adds delete functionality
+    // Deletes meal in DB
     fun deleteMeal(mealId: String){
         val userId = auth.currentUser?.uid ?: return
-
         db.collection("users").document(userId).collection("nutrition")
             .document(mealId)
             .delete()

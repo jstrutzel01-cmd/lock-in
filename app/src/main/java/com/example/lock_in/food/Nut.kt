@@ -105,24 +105,31 @@ fun Nut(nutViewModel: NutViewModel = viewModel()) {
                                 modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
                             )
                         }
-                        // List of meal cards
-                        items(mealsForDay, key = { it.id }) { meal ->
-                            val dismissState = rememberSwipeToDismissBoxState(
-                                confirmValueChange = { state ->
-                                    if (state == SwipeToDismissBoxValue.EndToStart) {
-                                        nutViewModel.deleteMeal(meal.id)
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                },
-                            )
-                            Column(modifier = Modifier.padding(bottom = 12.dp)) {
+                        val mealsByTime = mealsForDay.groupBy { formatTime(it.timestamp) }
+                        mealsByTime.forEach { (timeString, mealsAtSameTime) ->
+                            item {
                                 Text(
-                                    text = "${formatTime(meal.timestamp)}:",
+                                    text = "$timeString:",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                                    modifier = Modifier.padding(
+                                        start = 4.dp,
+                                        bottom = 8.dp,
+                                        top = 8.dp
+                                    )
+                                )
+                            }
+                            // List of meal cards
+                            items(mealsAtSameTime, key = { it.id }) { meal ->
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { state ->
+                                        if (state == SwipeToDismissBoxValue.EndToStart) {
+                                            nutViewModel.deleteMeal(meal.id)
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    },
                                 )
                                 // Delete functionality
                                 SwipeToDismissBox(
