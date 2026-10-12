@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -34,6 +35,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.Calendar
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import kotlinx.coroutines.launch
+import android.widget.Toast
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.pointerInput
 
 data class Meal (
     @DocumentId val id: String = "",
@@ -44,19 +51,21 @@ data class Meal (
     val fat: Int = 0,
     val timestamp: Long = System.currentTimeMillis()
 )
+
+// Main
 @Composable
 fun Nut(nutViewModel: NutViewModel = viewModel()) {
-    // Constants
     val c = LocalContext.current
     val u = remember { Prf.ld(c) }
     val meals by nutViewModel.meals.collectAsState()
-    //Variables
+
     var showDialog by remember { mutableStateOf(false) }
+    var mealToEdit by remember { mutableStateOf<Meal?>(null) }
+
     LaunchedEffect(Unit){
         nutViewModel.fetchMealsFromFirebase()
     }
 
-    // "Add" Button
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(onClick = { showDialog = true }) {
@@ -70,18 +79,23 @@ fun Nut(nutViewModel: NutViewModel = viewModel()) {
         ) {
             Text("Nutrition", style = MaterialTheme.typography.headlineSmall)
             if (u == null) {
-                Text("Finish onboarding to get your targets."); return@Column
-            } // "Today's Nutrition" Card
+                Text("Finish onboarding to get your targets.")
+                return@Column
+            }
+
             Card(Modifier.fillMaxWidth()) {
                 Column(
                     Modifier.padding(all = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text("Today", style = MaterialTheme.typography.titleMedium)
-                    val totalCalories = meals.sumOf { it.calories }
-                    val totalProtein = meals.sumOf { it.protein }
-                    val totalCarbs = meals.sumOf { it.carbs }
-                    val totalFat = meals.sumOf { it.fat }
+
+                    val todaysMeals = meals.filter { formatDay(it.timestamp) == "Today" }
+                    val totalCalories = todaysMeals.sumOf { it.calories }
+                    val totalProtein = todaysMeals.sumOf { it.protein }
+                    val totalCarbs = todaysMeals.sumOf { it.carbs }
+                    val totalFat = todaysMeals.sumOf { it.fat }
+
                     Bar(nm = "Calories", cur = totalCalories, max = u.kcal, un = "kcal")
                     Bar(nm = "Protein", cur = totalProtein, max = u.pro, un = "g")
                     Bar(nm = "Carbs", cur = totalCarbs, max = u.carb, un = "g")
@@ -91,13 +105,13 @@ fun Nut(nutViewModel: NutViewModel = viewModel()) {
             if (meals.isEmpty()) {
                 Text("No meals logged yet.")
             } else {
+                val groupedMeals = meals.groupBy { formatDay(it.timestamp) }
+
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val groupedMeals = meals.groupBy { formatDay(it.timestamp) }
                     groupedMeals.forEach { (dayString, mealsForDay) ->
-                        // List of Days
                         item {
                             Text(
                                 text = "$dayString:",
@@ -119,80 +133,123 @@ fun Nut(nutViewModel: NutViewModel = viewModel()) {
                                     )
                                 )
                             }
-                            // List of meal cards
                             items(mealsAtSameTime, key = { it.id }) { meal ->
-                                val dismissState = rememberSwipeToDismissBoxState(
-                                    confirmValueChange = { state ->
-                                        if (state == SwipeToDismissBoxValue.EndToStart) {
-                                            nutViewModel.deleteMeal(meal.id)
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    },
-                                )
-                                // Delete functionality
-                                SwipeToDismissBox(
-                                    state = dismissState,
-                                    enableDismissFromStartToEnd = false,
-                                    backgroundContent = {
-                                        Box(
-                                            Modifier
-                                                .fillMaxSize()
-                                                .clip(CardDefaults.shape)
-                                                .background(Color.Red)
-                                                .padding(horizontal = 20.dp),
-                                            contentAlignment = Alignment.CenterEnd
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = "Delete Meal",
-                                                tint = Color.White
-                                            )
-                                        }
-                                    },
-                                    // Card used by individual meals
-                                    content = {
-                                        Card(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween
+                                val twentyFourHoursAgo = System.currentTimeMillis() - (24L * 60 * 60 * 1000)
+                                val isWithin24Hours = meal.timestamp >= twentyFourHoursAgo
+
+                                if (isWithin24Hours) {
+                                    val scope = rememberCoroutineScope()
+                                    val dismissState = rememberSwipeToDismissBoxState(
+                                        confirmValueChange = { state ->
+                                            when (state) {
+                                                SwipeToDismissBoxValue.StartToEnd -> {
+                                                    nutViewModel.deleteMeal(meal.id)
+                                                    true
+                                                }
+                                                SwipeToDismissBoxValue.EndToStart -> {
+                                                    scope.launch {
+                                                        kotlinx.coroutines.delay(150)
+                                                        mealToEdit = meal
+                                                    }
+                                                    false
+                                                }
+                                                else -> false
+                                            }
+                                        },
+                                        positionalThreshold = { totalDistance -> totalDistance * 0.3f }
+                                    )
+                                    // Deletion and Modification Visuals
+                                    SwipeToDismissBox(
+                                        state = dismissState,
+                                        modifier = Modifier.padding(bottom = 8.dp),
+                                        backgroundContent = {
+                                            val direction = dismissState.dismissDirection
+                                            val backgroundColor = when (direction) {
+                                                SwipeToDismissBoxValue.StartToEnd -> Color.Red
+                                                SwipeToDismissBoxValue.EndToStart -> Color.Blue
+                                                else -> Color.Transparent
+                                            }
+                                            val icon = when (direction) {
+                                                SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Delete
+                                                SwipeToDismissBoxValue.EndToStart -> Icons.Default.Edit
+                                                else -> Icons.Default.Delete
+                                            }
+                                            val alignment = when (direction) {
+                                                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                                                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                                                else -> Alignment.Center
+                                            }
+
+                                            Box(
+                                                Modifier
+                                                    .fillMaxSize()
+                                                    .clip(CardDefaults.shape)
+                                                    .background(backgroundColor)
+                                                    .padding(horizontal = 20.dp),
+                                                contentAlignment = alignment
                                             ) {
-                                                Text(
-                                                    meal.name,
-                                                    style = MaterialTheme.typography.bodyLarge
-                                                )
-                                                Text(
-                                                    "${meal.calories} kcal",
-                                                    style = MaterialTheme.typography.bodyMedium
+                                                if (direction != SwipeToDismissBoxValue.Settled) {
+                                                    Icon(icon, contentDescription = null, tint = Color.White)
+                                                }
+                                            }
+                                        },
+                                        // Generates recent meals
+                                        content = {
+                                            MealCardItem(meal = meal)
+                                        }
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(bottom = 8.dp)
+                                            .pointerInput(Unit) {
+                                                detectHorizontalDragGestures(
+                                                    onDragStart = {
+                                                        android.widget.Toast.makeText(
+                                                            c,
+                                                            "You cannot modify food older than 24 hours.",
+                                                            android.widget.Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    },
+                                                    onHorizontalDrag = { change, _ -> change.consume() }
                                                 )
                                             }
-                                        }
+                                    ) {
+                                        // Generates meals older than 24hrs
+                                        MealCardItem(meal = meal)
                                     }
-                                )
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
 
-    // "Add Food" Popup
-    if (showDialog) {
-        AddFoodDialog(
-            onDismiss = { showDialog = false },
-            onSave = { newMeal ->
-                nutViewModel.saveMealToFirebase(newMeal)
-                showDialog = false }
-        )
+        if (showDialog) {
+            AddFoodDialog(
+                onDismiss = { showDialog = false },
+                onSave = { newMeal ->
+                    nutViewModel.saveMealToFirebase(newMeal)
+                    showDialog = false
+                }
+            )
+        }
+
+        mealToEdit?.let { meal ->
+            ModifyFoodDialog(
+                meal = meal,
+                onDismiss = { mealToEdit = null },
+                onSave = { updatedMeal ->
+                    nutViewModel.saveMealToFirebase(updatedMeal)
+                    mealToEdit = null
+                }
+            )
+        }
     }
 }
 
-//Function - Draws progress bars
+// Draws progress bars
 @Composable
 private fun Bar(nm: String, cur: Int, max: Int, un: String) = Column {
     Text("$nm $cur / $max $un")
@@ -202,7 +259,7 @@ private fun Bar(nm: String, cur: Int, max: Int, un: String) = Column {
     )
 }
 
-// Function - Saves users input from "add food" popup
+// Saves users input from "add food" popup
 @Composable
 fun AddFoodDialog(onDismiss: () -> Unit, onSave: (Meal) -> Unit){
     var foodName by remember { mutableStateOf("") }
@@ -255,6 +312,60 @@ fun AddFoodDialog(onDismiss: () -> Unit, onSave: (Meal) -> Unit){
         }
     )
 }
+// Saves users input from "modify food" popup
+@Composable
+fun ModifyFoodDialog(meal: Meal, onDismiss: () -> Unit, onSave: (Meal) -> Unit) {
+    var foodName by remember { mutableStateOf(meal.name) }
+    var calories by remember { mutableStateOf(if (meal.calories > 0) meal.calories.toString() else "") }
+    var protein by remember { mutableStateOf(if (meal.protein > 0) meal.protein.toString() else "") }
+    var carbs by remember { mutableStateOf(if (meal.carbs > 0) meal.carbs.toString() else "") }
+    var fat by remember { mutableStateOf(if (meal.fat > 0) meal.fat.toString() else "") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Modify meal") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = foodName,
+                    onValueChange = { foodName = it },
+                    label = { Text("Food Name") })
+                OutlinedTextField(
+                    value = calories,
+                    onValueChange = { calories = it },
+                    label = { Text("Calories") })
+                OutlinedTextField(
+                    value = protein,
+                    onValueChange = { protein = it },
+                    label = { Text("Protein (g)") })
+                OutlinedTextField(
+                    value = carbs,
+                    onValueChange = { carbs = it },
+                    label = { Text("Carbs (g)") })
+                OutlinedTextField(
+                    value = fat,
+                    onValueChange = { fat = it },
+                    label = { Text("Fat (g)") })
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                // Uses .copy() to retain the same Firestore Document ID and Timestamp
+                val updatedMeal = meal.copy(
+                    name = foodName,
+                    calories = calories.toIntOrNull() ?: 0,
+                    protein = protein.toIntOrNull() ?: 0,
+                    carbs = carbs.toIntOrNull() ?: 0,
+                    fat = fat.toIntOrNull() ?: 0
+                )
+                onSave(updatedMeal)
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
 
 // Formats date for listing
 fun formatDay(timestamp: Long): String{
@@ -270,7 +381,6 @@ fun formatDay(timestamp: Long): String{
         currentYear == mealYear && currentDay - mealDay == 1 -> "Yesterday"
         else -> SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(timestamp))
     }
-
 }
 
 // Formats time for listing
@@ -278,3 +388,19 @@ fun formatTime(timestamp: Long): String {
     return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
 }
 
+// Generates Meal Card
+@Composable
+fun MealCardItem(meal: Meal) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(meal.name, style = MaterialTheme.typography.bodyLarge)
+            Text("${meal.calories} kcal", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}

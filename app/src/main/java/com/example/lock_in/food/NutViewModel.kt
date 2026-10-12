@@ -13,14 +13,16 @@ class NutViewModel : ViewModel() {
     private val _meals = MutableStateFlow<List<Meal>>(emptyList())
     val meals: StateFlow<List<Meal>> = _meals
 
+    // Saves meals to/Modifies meals on Firebase
     fun saveMealToFirebase(meal: Meal) {
-        val userID = auth.currentUser?.uid ?: return
+        val userId = auth.currentUser?.uid ?: return
+        val userNutritionCollection = db.collection("users").document(userId).collection("nutrition")
 
-        db.collection("users").document(userID)
-            .collection("nutrition").add(meal)
-            .addOnSuccessListener {
-                fetchMealsFromFirebase()
-            }
+        if (meal.id.isNotEmpty()) {
+            userNutritionCollection.document(meal.id).set(meal)
+        } else {
+            userNutritionCollection.add(meal)
+        }
     }
 
     // Fetches meals from DB and sorts them by when they were uploaded
