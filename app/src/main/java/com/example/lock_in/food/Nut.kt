@@ -41,6 +41,17 @@ import android.widget.Toast
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import java.util.UUID
 
 data class Meal (
     @DocumentId val id: String = "",
@@ -262,6 +273,19 @@ private fun Bar(nm: String, cur: Int, max: Int, un: String) = Column {
 // Saves users input from "add food" popup
 @Composable
 fun AddFoodDialog(onDismiss: () -> Unit, onSave: (Meal) -> Unit){
+    // UI States
+    val scope = rememberCoroutineScope()
+    var isManual by remember { mutableStateOf(false) }
+
+    // Search States
+    var selectedFood by remember { mutableStateOf<UsdaFood?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<UsdaFood>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    // Manual Inputs
+    var quantity by remember { mutableStateOf("1") }
     var foodName by remember { mutableStateOf("") }
     var calories by remember { mutableStateOf("") }
     var protein by remember { mutableStateOf("") }
@@ -270,46 +294,191 @@ fun AddFoodDialog(onDismiss: () -> Unit, onSave: (Meal) -> Unit){
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {Text("Log Meal")},
+        title = {Text(if (isManual) "Add Custom Food" else if (selectedFood != null) "How many servings?" else "Search Food")},
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = foodName,
-                    onValueChange = { foodName = it },
-                    label = { Text("Food Name") })
-                OutlinedTextField(
-                    value = calories,
-                    onValueChange = { calories = it },
-                    label = { Text("Calories") })
-                OutlinedTextField(
-                    value = protein,
-                    onValueChange = { protein = it },
-                    label = { Text("Protein (g)") })
-                OutlinedTextField(
-                    value = carbs,
-                    onValueChange = { carbs = it },
-                    label = { Text("Carbs (g)") })
-                OutlinedTextField(
-                    value = fat,
-                    onValueChange = { fat = it },
-                    label = { Text("Fat (g)") })
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Search Mode
+                if (!isManual && selectedFood == null) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Food name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    // Search Button
+                    Button(
+                        onClick = {
+                            isSearching = true
+                            errorMessage = ""
+                            scope.launch {
+                                try {
+                                    val response = RetrofitInstance.api.searchFoods(searchQuery)
+                                    val rawList = response.foods.filter { it.description.isNotBlank() && it.foodNutrients.isNotEmpty() }
+                                    val distinctList = rawList.distinctBy { it.description.lowercase() }
+                                    searchResults = distinctList.sortedWith(
+                                        compareByDescending<UsdaFood> { it.description.contains(searchQuery, ignoreCase = true) }
+                                            .thenBy { it.description.length }
+                                    )
+                                } catch (e: Exception) {
+                                    errorMessage = "Error: ${e.message}"
+                                    //errorMessage = "Failed to search. Check internet."
+                                } finally {
+                                    isSearching = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        !isSearching
+                    ) {
+                        Text(if (isSearching) "Searching for food..." else "Search Database")
+                    }
+                    if (errorMessage.isNotEmpty()) {
+                        Text(
+                            errorMessage,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
+                        items(searchResults) { food ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedFood = food }
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Text(food.description, style = MaterialTheme.typography.bodyLarge)
+                                val categoryLabel = food.foodCategory ?: "Unknown Category"
+                                val subtitleText = if (!food.brandOwner.isNullOrBlank()) {
+                                    "Brand: ${food.brandOwner} • $categoryLabel"
+                                } else {
+                                    "Category: $categoryLabel"
+                                }
+                                Text(
+                                    text = subtitleText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text("${food.calories.toInt()} kcal per 100g", style = MaterialTheme.typography.bodySmall)
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                    TextButton(
+                        onClick = { isManual = true },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text("Can't find your food? Add it manually")
+                    }
+                // Determine Quantity
+                } else if (selectedFood != null) {
+                    Text("Selected: ${selectedFood!!.description}", style = MaterialTheme.typography.titleMedium)
+                    val baseCal = selectedFood!!.calories
+
+                    OutlinedTextField(
+                        value = quantity,
+                        onValueChange = { quantity = it },
+                        label = { Text("Quantity (e.g., 2.5)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    val q = quantity.toDoubleOrNull() ?: 0.0
+                    Text("Total Calories: ${(baseCal * q).toInt()} kcal")
+                    // Manual Mode
+                } else if (isManual) {
+                    OutlinedTextField(
+                        value = foodName,
+                        onValueChange = { foodName = it },
+                        label = { Text("Food Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = calories,
+                        onValueChange = { calories = it },
+                        label = { Text("Calories") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = protein,
+                            onValueChange = { protein = it },
+                            label = { Text("Pro (g)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = carbs,
+                            onValueChange = { carbs = it },
+                            label = { Text("Carb (g)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = fat,
+                            onValueChange = { fat = it },
+                            label = { Text("Fat (g)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
-        },
-        confirmButton = {
-            Button(onClick = {
-                val newMeal = Meal(
-                    name = foodName,
-                    calories = calories.toIntOrNull() ?: 0,
-                    protein = protein.toIntOrNull() ?: 0,
-                    carbs = carbs.toIntOrNull() ?: 0,
-                    fat = fat.toIntOrNull() ?: 0
-                )
-                onSave(newMeal)
-            }) { Text("Save") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel")}
-        }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val timestamp = System.currentTimeMillis()
+                        val id = UUID.randomUUID().toString()
+
+                        if (selectedFood != null) {
+                            val quan = quantity.toDoubleOrNull() ?: 1.0
+                            val meal = Meal(
+                                id = id,
+                                name = selectedFood!!.description,
+                                calories = (selectedFood!!.calories * quan).toInt(),
+                                protein = (selectedFood!!.protein * quan).toInt(),
+                                carbs = (selectedFood!!.carbs * quan).toInt(),
+                                fat = (selectedFood!!.fat * quan).toInt(),
+                                timestamp = timestamp
+                            )
+                            onSave(meal)
+                        } else if (isManual) {
+                            val meal = Meal(
+                                id = id,
+                                name = foodName.ifBlank { "Custom Food" },
+                                calories = calories.toIntOrNull() ?: 0,
+                                protein = protein.toIntOrNull() ?: 0,
+                                carbs = carbs.toIntOrNull() ?: 0,
+                                fat = fat.toIntOrNull() ?: 0,
+                                timestamp = timestamp
+                            )
+                            onSave(meal)
+                        }
+                    },
+                    enabled = (selectedFood != null && quantity.toDoubleOrNull() != null) || (isManual && foodName.isNotBlank() && calories.isNotBlank())
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        if (selectedFood != null) selectedFood = null
+                        else if (isManual) isManual = false
+                        else onDismiss()
+                    }
+                ) {
+                    Text(if (selectedFood != null || isManual) "Back" else "Cancel")
+                }
+            }
     )
 }
 // Saves users input from "modify food" popup
